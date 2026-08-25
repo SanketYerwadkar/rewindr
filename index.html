@@ -818,6 +818,21 @@
         <div class="empty-sub">Add a point while watching to quickly return to important moments.</div>
         <button class="add-btn" id="emptyAddBtn" style="height:36px;">+ Add point</button>
       </div>
+
+      <!-- PLAYLIST / MIXER PANEL -->
+      <div class="playlist-section" style="border-top: 1px solid var(--hairline); padding: 14px 16px; background: rgba(0,0,0,0.12); display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; font-weight:600; color:var(--text-1);">Playlist Queue</span>
+          <button id="addPlaylistBtn" style="background: var(--steel-dim); border: 1px solid rgba(91,122,140,0.4); color: var(--text-1); font-size: 11px; padding: 4px 10px; border-radius: 4px; font-weight: 500;">+ Add Video</button>
+        </div>
+        <div id="playlistDropZone" style="border: 1px dashed var(--hairline); border-radius: 6px; padding: 12px; text-align: center; font-size: 11px; color: var(--text-3); cursor: pointer; transition: all 0.2s;">
+          Drag & Drop or Click to Add Video
+        </div>
+        <div id="playlistItems" style="max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;">
+          <!-- Playlist items will render here dynamically -->
+        </div>
+        <input type="file" id="playlistFileSelector" accept="video/*" multiple style="display: none;">
+      </div>
     </div>
 
     <!-- collapsed rail -->
@@ -954,10 +969,22 @@
   const lockLabel = document.getElementById('lockLabel');
   const unlockBtn = document.getElementById('unlockBtn');
 
+  // Playlist Elements
+  const addPlaylistBtn = document.getElementById('addPlaylistBtn');
+  const playlistDropZone = document.getElementById('playlistDropZone');
+  const playlistItems = document.getElementById('playlistItems');
+  const playlistFileSelector = document.getElementById('playlistFileSelector');
+
   // State Variables
   let currentFile = null; // Stores currently loaded File metadata (name, size)
   let points = [];        // Point list array: { id, title, timestamp, keyboardShortcut }
   let editingPointId = null; // String ID when editing, null when adding
+
+  // Playlist State Variables
+  let playlist = []; // Array of { id, file, name, duration, objectURL, startOffset, endOffset }
+  let currentPlaylistIdx = 0;
+  let totalCombinedDuration = 0;
+  let isSwitchingVideo = false;
   let listeningForShortcut = false;
   let capturedShortcut = '?';
   let isMuted = false;
@@ -993,6 +1020,11 @@
 
   // --- PERSISTENCE LAYER ---
   function getStorageKey() {
+    if (playlist.length > 0) {
+      // Create a unique key combining all names and sizes in the playlist
+      const playlistId = playlist.map(item => `${item.name}_${item.file.size}`).join('::');
+      return `video_points_playlist_${playlistId}`;
+    }
     if (!currentFile) return null;
     return `video_points_${currentFile.name}_${currentFile.size}`;
   }
@@ -1015,39 +1047,67 @@
     renderTicks();
   }
 
+  // Helper to fetch video duration
+  function getVideoDuration(file) {
+    return new Promise((resolve) => {
+      const tempVideo = document.createElement('video');
+      tempVideo.preload = 'metadata';
+      tempVideo.src = URL.createObjectURL(file);
+      tempVideo.onloadedmetadata = () => {
+        resolve(tempVideo.duration);
+        URL.revokeObjectURL(tempVideo.src);
+      };
+      tempVideo.onerror = () => {
+        resolve(0);
+      };
+    });
+  }
+
   // --- CORE FILE LOADING ---
-  function loadVideoFile(file) {
-    currentFile = file;
-    const objectURL = URL.createObjectURL(file);
-    mainVideo.src = objectURL;
-    mainVideo.style.display = 'block';
-    uploadPrompt.style.display = 'none';
+  async function loadVideoFile(file) {
+    // Clear old playlist
+    playlist.forEach(item => URL.revokeObjectURL(item.objectURL));
+    playlist = [];
     
-    // Update Now Playing details
-    nowPlayingText.textContent = file.name;
-    nowPlayingContainer.style.display = 'flex';
+    const duration = await getVideoDuration(file);
+    if (duration === 0) {
+      alert("Unsupported or invalid video format.");
+      return;
+    }
+    
+    currentFile = file;
+    const item = {
+      id: 'pl_' + Date.now(),
+      file: file,
+      name: file.name,
+      duration: duration,
+      objectURL: URL.createObjectURL(file)
+    };
+    playlist.push(item);
+    
+    updatePlaylistOffsets();
+    renderPlaylist();
+    
+    currentPlaylistIdx = 0;
+    await playPlaylistItem(0, 0, false);
+    setVolume(0);
     
     // Load points & resets
     loadPoints();
     renderPoints();
     renderTicks();
-    
-    // Set volume to 0 and don't auto-start
-    setVolume(0);
-    mainVideo.pause();
-    updatePlayPauseState();
   }
 
-  // Drag and drop events
+  // Drag and drop events on stage
   videoStage.addEventListener('dragover', (e) => {
     e.preventDefault();
   });
-  videoStage.addEventListener('drop', (e) => {
+  videoStage.addEventListener('drop', async (e) => {
     e.preventDefault();
     if (app.classList.contains('locked')) return;
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('video/')) {
-      loadVideoFile(file);
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('video/'));
+    if (files.length > 0) {
+      await addFilesToPlaylist(files);
     }
   });
 
@@ -1139,11 +1199,207 @@
   mainVideo.addEventListener('play', updatePlayPauseState);
   mainVideo.addEventListener('pause', updatePlayPauseState);
 
+  // --- PLAYLIST CORE FUNCTIONALITY ---
+  function updatePlaylistOffsets() {
+    let currentOffset = 0;
+    totalCombinedDuration = 0;
+    playlist.forEach(item => {
+      item.startOffset = currentOffset;
+      item.endOffset = currentOffset + item.duration;
+      currentOffset += item.duration;
+    });
+    totalCombinedDuration = currentOffset;
+    
+    // Update total duration label with the sum
+    tcTotal.textContent = formatTime(totalCombinedDuration);
+    renderTicks();
+  }
+
+  function renderPlaylist() {
+    playlistItems.innerHTML = '';
+    playlist.forEach((item, index) => {
+      const el = document.createElement('div');
+      el.style.cssText = `
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: rgba(255,255,255,0.03);
+        border: 1px solid var(--hairline);
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-size: 11px;
+        color: ${index === currentPlaylistIdx ? 'var(--amber)' : 'var(--text-2)'};
+        cursor: pointer;
+      `;
+      el.innerHTML = `
+        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; font-weight: ${index === currentPlaylistIdx ? '600' : '400'};">
+          ${index + 1}. ${escapeHtml(item.name)}
+        </span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span>${formatTime(item.duration)}</span>
+          <button class="remove-playlist-item" style="background:none; border:none; color:var(--danger); cursor:pointer; font-size:12px; padding:0 2px;">&times;</button>
+        </div>
+      `;
+      
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.remove-playlist-item')) return;
+        playPlaylistItem(index, 0, true);
+        renderPlaylist();
+      });
+      
+      el.querySelector('.remove-playlist-item').onclick = (e) => {
+        e.stopPropagation();
+        removePlaylistItem(index);
+      };
+      
+      playlistItems.appendChild(el);
+    });
+    
+    // Toggle drop zone instruction styling
+    if (playlist.length > 0) {
+      playlistDropZone.style.padding = '8px';
+      playlistDropZone.textContent = '+ Add More Videos';
+    } else {
+      playlistDropZone.style.padding = '12px';
+      playlistDropZone.textContent = 'Drag & Drop or Click to Add Video';
+    }
+  }
+
+  function removePlaylistItem(index) {
+    const item = playlist[index];
+    URL.revokeObjectURL(item.objectURL);
+    playlist.splice(index, 1);
+    
+    if (playlist.length === 0) {
+      // Reset player if empty
+      mainVideo.src = '';
+      mainVideo.style.display = 'none';
+      uploadPrompt.style.display = 'flex';
+      nowPlayingContainer.style.display = 'none';
+      totalCombinedDuration = 0;
+      tcTotal.textContent = '00:00:00';
+      tcNow.textContent = '00:00:00';
+      scrubFill.style.width = '0%';
+      scrubHandle.style.left = '0%';
+    } else {
+      if (currentPlaylistIdx >= playlist.length) {
+        currentPlaylistIdx = playlist.length - 1;
+      }
+      updatePlaylistOffsets();
+      playPlaylistItem(currentPlaylistIdx, 0, false);
+    }
+    renderPlaylist();
+  }
+
+  async function addFilesToPlaylist(files) {
+    const wasEmpty = playlist.length === 0;
+    
+    for (const file of files) {
+      const duration = await getVideoDuration(file);
+      if (duration === 0) continue;
+      
+      const item = {
+        id: 'pl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        file: file,
+        name: file.name,
+        duration: duration,
+        objectURL: URL.createObjectURL(file)
+      };
+      playlist.push(item);
+    }
+    
+    if (playlist.length > 0) {
+      updatePlaylistOffsets();
+      renderPlaylist();
+      
+      if (wasEmpty) {
+        currentPlaylistIdx = 0;
+        // Don't auto-start, volume 0 as requested
+        await playPlaylistItem(0, 0, false);
+        setVolume(0);
+      }
+      
+      loadPoints();
+      renderPoints();
+    }
+  }
+
+  async function playPlaylistItem(idx, relativeTime = 0, autoPlay = true) {
+    if (idx < 0 || idx >= playlist.length) return;
+    isSwitchingVideo = true;
+    currentPlaylistIdx = idx;
+    const item = playlist[idx];
+    currentFile = item.file; // Set for point metadata
+    
+    // Update sidebar text
+    nowPlayingText.textContent = `${item.name} (${currentPlaylistIdx + 1}/${playlist.length})`;
+    nowPlayingContainer.style.display = 'flex';
+    
+    // Set video src
+    mainVideo.src = item.objectURL;
+    mainVideo.style.display = 'block';
+    uploadPrompt.style.display = 'none';
+
+    return new Promise((resolve) => {
+      mainVideo.onloadedmetadata = () => {
+        mainVideo.currentTime = relativeTime;
+        isSwitchingVideo = false;
+        if (autoPlay) {
+          mainVideo.play().catch(() => {});
+        } else {
+          mainVideo.pause();
+        }
+        updatePlayPauseState();
+        mainVideo.onloadedmetadata = null;
+        resolve();
+      };
+    });
+  }
+
+  // Playlist sidebar inputs & drop zone bindings
+  playlistDropZone.onclick = () => {
+    playlistFileSelector.click();
+  };
+  addPlaylistBtn.onclick = () => {
+    playlistFileSelector.click();
+  };
+  playlistFileSelector.onchange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+      await addFilesToPlaylist(files);
+    }
+    playlistFileSelector.value = ''; // Reset
+  };
+
+  playlistDropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    playlistDropZone.style.borderColor = 'var(--amber)';
+    playlistDropZone.style.background = 'rgba(232,163,61,0.05)';
+  });
+  playlistDropZone.addEventListener('dragleave', () => {
+    playlistDropZone.style.borderColor = 'var(--hairline)';
+    playlistDropZone.style.background = 'none';
+  });
+  playlistDropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    playlistDropZone.style.borderColor = 'var(--hairline)';
+    playlistDropZone.style.background = 'none';
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type.startsWith('video/'));
+    if (files.length > 0) {
+      await addFilesToPlaylist(files);
+    }
+  });
+
   // Time Updates & Progress Bar
   mainVideo.addEventListener('timeupdate', () => {
+    if (isSwitchingVideo || playlist.length === 0) return;
     if (isNaN(mainVideo.duration)) return;
-    tcNow.textContent = formatTime(mainVideo.currentTime);
-    const pct = (mainVideo.currentTime / mainVideo.duration) * 100;
+    
+    const currentItem = playlist[currentPlaylistIdx];
+    const globalTime = currentItem.startOffset + mainVideo.currentTime;
+    
+    tcNow.textContent = formatTime(globalTime);
+    const pct = totalCombinedDuration > 0 ? (globalTime / totalCombinedDuration) * 100 : 0;
     scrubFill.style.width = pct + '%';
     scrubHandle.style.left = pct + '%';
     
@@ -1152,16 +1408,37 @@
   });
 
   mainVideo.addEventListener('durationchange', () => {
-    tcTotal.textContent = formatTime(mainVideo.duration);
     renderTicks();
+  });
+
+  mainVideo.addEventListener('ended', () => {
+    if (currentPlaylistIdx < playlist.length - 1) {
+      playPlaylistItem(currentPlaylistIdx + 1, 0, true).then(() => {
+        renderPlaylist();
+      });
+    }
   });
 
   // Scrubbing
   function seekToPosition(e) {
-    if (!mainVideo.src || isNaN(mainVideo.duration)) return;
+    if (playlist.length === 0 || totalCombinedDuration === 0) return;
     const rect = scrubTrack.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    mainVideo.currentTime = pct * mainVideo.duration;
+    const globalTargetTime = pct * totalCombinedDuration;
+    
+    // Find which video contains this time
+    const idx = playlist.findIndex(item => globalTargetTime >= item.startOffset && globalTargetTime <= item.endOffset);
+    if (idx !== -1) {
+      const relativeTime = globalTargetTime - playlist[idx].startOffset;
+      const wasPaused = mainVideo.paused;
+      if (idx !== currentPlaylistIdx) {
+        playPlaylistItem(idx, relativeTime, !wasPaused).then(() => {
+          renderPlaylist();
+        });
+      } else {
+        mainVideo.currentTime = relativeTime;
+      }
+    }
   }
 
   let isDraggingScrub = false;
