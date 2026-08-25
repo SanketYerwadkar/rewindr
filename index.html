@@ -1563,14 +1563,18 @@
   }
   lockToggle.onclick = () => setLocked(!app.classList.contains('locked'));
   unlockBtn.onclick = () => setLocked(false);
-
-  // --- POINTS LIST MANAGEMENT ---
   function renderPoints() {
     pointsList.innerHTML = '';
     const q = searchInput.value.trim().toLowerCase();
     
-    // Sort points chronologically
-    points.sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp));
+    // Sort points by global combined timestamp
+    points.sort((a, b) => {
+      const aVideo = playlist.find(v => v.name === a.videoName && v.file.size === a.videoSize);
+      const bVideo = playlist.find(v => v.name === b.videoName && v.file.size === b.videoSize);
+      const aOffset = aVideo ? aVideo.startOffset : 0;
+      const bOffset = bVideo ? bVideo.startOffset : 0;
+      return (aOffset + parseTimestamp(a.timestamp)) - (bOffset + parseTimestamp(b.timestamp));
+    });
     
     let renderedCount = 0;
     points.forEach((pt) => {
@@ -1584,11 +1588,14 @@
       // Shortcut key indicator content
       const displayKey = pt.keyboardShortcut && pt.keyboardShortcut !== '?' ? pt.keyboardShortcut : '·';
       
+      // Show associated video label if playlist has multiple items
+      const videoLabel = playlist.length > 1 ? `<span style="color:var(--text-3); font-size:10px; margin-left:6px; overflow:hidden; text-overflow:ellipsis; max-width:80px; display:inline-block; vertical-align:bottom; white-space:nowrap;">(${escapeHtml(pt.videoName)})</span>` : '';
+      
       card.innerHTML = `
         <div class="keycap">${displayKey}</div>
         <div class="point-meta">
           <div class="point-title">${escapeHtml(pt.title)}</div>
-          <div class="point-time">${pt.timestamp}</div>
+          <div class="point-time">${pt.timestamp} ${videoLabel}</div>
         </div>
         <button class="point-menu-btn" data-menu="${pt.id}"><svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 100-4 2 2 0 000 4zm0 2a2 2 0 100 4 2 2 0 000-4zm0 8a2 2 0 100 4 2 2 0 000-4z"/></svg></button>
         <div class="point-dropdown" id="menu-${pt.id}">
@@ -1620,7 +1627,7 @@
       card.querySelector('.edit-action').onclick = () => { openEditModal(pt); };
       card.querySelector('.shortcut-action').onclick = () => { openEditShortcutModal(pt); };
       card.querySelector('.delete-action').onclick = () => { deletePoint(pt.id); };
-
+ 
       pointsList.appendChild(card);
     });
     
@@ -1642,35 +1649,43 @@
 
   function renderTicks() {
     tickContainer.innerHTML = '';
-    if (isNaN(mainVideo.duration) || mainVideo.duration <= 0) return;
+    if (playlist.length === 0 || totalCombinedDuration <= 0) return;
     
     points.forEach((pt) => {
+      // Find the offset of the video this point belongs to
+      const item = playlist.find(i => i.name === pt.videoName && i.file.size === pt.videoSize);
+      if (!item) return;
+      
       const secs = parseTimestamp(pt.timestamp);
       if (isNaN(secs)) return;
-      const pct = (secs / mainVideo.duration) * 100;
+      
+      const globalSecs = item.startOffset + secs;
+      const pct = (globalSecs / totalCombinedDuration) * 100;
       if (pct < 0 || pct > 100) return;
       
       const tick = document.createElement('div');
       tick.className = 'point-tick';
       tick.style.left = pct + '%';
-      tick.title = `${pt.title} (${pt.timestamp})`;
+      tick.title = `${pt.title} (${pt.timestamp}) - ${pt.videoName}`;
       tickContainer.appendChild(tick);
     });
   }
 
   function updateActivePointHighlight() {
-    if (points.length === 0) return;
+    if (points.length === 0 || playlist.length === 0) return;
+    const activeItem = playlist[currentPlaylistIdx];
     const curTime = mainVideo.currentTime;
     
-    // Find the point closest/immediately preceding current time
     let activePt = null;
     let minDiff = Infinity;
     
     points.forEach((pt) => {
+      // Only highlight if it matches the current active video
+      if (pt.videoName !== activeItem.name || pt.videoSize !== activeItem.file.size) return;
+      
       const t = parseTimestamp(pt.timestamp);
       if (isNaN(t)) return;
       const diff = curTime - t;
-      // If we are past the point, but within 2 seconds of it
       if (diff >= 0 && diff < minDiff) {
         activePt = pt;
         minDiff = diff;
@@ -1699,10 +1714,24 @@
     const secs = parseTimestamp(pt.timestamp);
     if (isNaN(secs)) return;
     
-    if (secs > mainVideo.duration) return;
-    mainVideo.currentTime = secs;
+    // Find the index of the video this point belongs to in the playlist
+    const idx = playlist.findIndex(item => item.name === pt.videoName && item.file.size === pt.videoSize);
+    if (idx !== -1) {
+      const wasPaused = mainVideo.paused;
+      if (idx !== currentPlaylistIdx) {
+        playPlaylistItem(idx, secs, !wasPaused).then(() => {
+          renderPlaylist();
+        });
+      } else {
+        mainVideo.currentTime = secs;
+      }
+    } else {
+      // Fallback
+      if (mainVideo.duration && secs > mainVideo.duration) return;
+      mainVideo.currentTime = secs;
+    }
     
-    // Resume playback if requested or if already playing
+    // Resume playback
     mainVideo.play().catch(() => {});
     updatePlayPauseState();
   }
@@ -1805,6 +1834,13 @@
       return;
     }
 
+    // Get active playlist video details
+    const activeItem = playlist[currentPlaylistIdx];
+    if (!activeItem) {
+      alert("No active video loaded.");
+      return;
+    }
+
     // Validation: Shortcut duplication check
     if (shortcut) {
       const duplicate = points.find(p => p.keyboardShortcut.toUpperCase() === shortcut.toUpperCase() && p.id !== editingPointId);
@@ -1830,7 +1866,9 @@
         id: 'pt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
         title: title,
         timestamp: formattedTs,
-        keyboardShortcut: shortcut
+        keyboardShortcut: shortcut,
+        videoName: activeItem.name,
+        videoSize: activeItem.file.size
       };
       points.push(newPt);
     }
