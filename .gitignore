@@ -1,8 +1,13 @@
-# Ignore local yt-dlp executable as server downloads it automatically
+# Ignore local binaries (downloaded automatically by server on startup)
 yt-dlp.exe
+ffmpeg.exe
+ffprobe.exe
 
-# Ignore local node modules (if any)
+# Ignore local node modules
 node_modules/
+
+# Ignore local temp downloads directory
+temp_downloads/
 
 # Ignore system generated logs / configs
 .gemini/

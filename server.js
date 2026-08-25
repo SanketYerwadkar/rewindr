@@ -2,11 +2,22 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { spawn, execFile } = require('child_process');
+const { spawn, exec, execFile } = require('child_process');
 const urlModule = require('url');
 
 const PORT = 3001;
 const YTDLP_PATH = path.join(__dirname, 'yt-dlp.exe');
+const FFMPEG_PATH = path.join(__dirname, 'ffmpeg.exe');
+const FFPROBE_PATH = path.join(__dirname, 'ffprobe.exe');
+const TEMP_DIR = path.join(__dirname, 'temp_downloads');
+
+// Ensure temp directory exists
+if (!fs.existsSync(TEMP_DIR)) {
+  fs.mkdirSync(TEMP_DIR);
+}
+
+// Download tracker state
+const downloads = {};
 
 // Helper to download yt-dlp.exe if not present
 function ensureYtDlp() {
@@ -44,8 +55,59 @@ function ensureYtDlp() {
   });
 }
 
-// Start ensuring yt-dlp is present right away
-ensureYtDlp().catch(err => console.error("Error downloading yt-dlp:", err));
+let ffmpegPromise = null;
+
+// Helper to download ffmpeg/ffprobe if not present
+function ensureFfmpeg() {
+  if (ffmpegPromise) return ffmpegPromise;
+
+  ffmpegPromise = new Promise((resolve, reject) => {
+    if (fs.existsSync(FFMPEG_PATH) && fs.existsSync(FFPROBE_PATH)) {
+      return resolve();
+    }
+    console.log("ffmpeg/ffprobe binaries not found. Downloading Windows binaries...");
+    
+    const psCommand = `
+      $ProgressPreference = 'SilentlyContinue';
+      Write-Host "Downloading ffmpeg...";
+      Invoke-WebRequest -Uri 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v4.4.1/ffmpeg-4.4.1-win-64.zip' -OutFile 'ffmpeg.zip';
+      Write-Host "Downloading ffprobe...";
+      Invoke-WebRequest -Uri 'https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v4.4.1/ffprobe-4.4.1-win-64.zip' -OutFile 'ffprobe.zip';
+      Write-Host "Extracting binaries...";
+      Expand-Archive -Path 'ffmpeg.zip' -DestinationPath '.' -Force;
+      Expand-Archive -Path 'ffprobe.zip' -DestinationPath '.' -Force;
+      Remove-Item 'ffmpeg.zip' -Force;
+      Remove-Item 'ffprobe.zip' -Force;
+    `;
+    
+    const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-Command', psCommand]);
+    
+    child.stdout.on('data', (data) => {
+      console.log(data.toString().trim());
+    });
+    
+    child.stderr.on('data', (data) => {
+      console.error(data.toString().trim());
+    });
+    
+    child.on('close', (code) => {
+      if (code === 0 && fs.existsSync(FFMPEG_PATH) && fs.existsSync(FFPROBE_PATH)) {
+        console.log("ffmpeg and ffprobe downloaded and extracted successfully.");
+        resolve();
+      } else {
+        ffmpegPromise = null; // reset to allow retry
+        reject(new Error("Failed to download or extract ffmpeg/ffprobe binaries. Code: " + code));
+      }
+    });
+  });
+
+  return ffmpegPromise;
+}
+
+// Start ensuring components are present right away
+ensureYtDlp()
+  .then(() => ensureFfmpeg())
+  .catch(err => console.error("Error setting up backend binaries:", err));
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -58,8 +120,6 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon'
 };
-
-const { exec } = require('child_process');
 
 const liveReloadClients = [];
 
@@ -111,7 +171,8 @@ const server = http.createServer(async (req, res) => {
 
     try {
       const ytdlp = await ensureYtDlp();
-      // Execute yt-dlp -J to get info in JSON format
+      await ensureFfmpeg(); // Make sure ffmpeg is ready for merges
+      
       const child = spawn(ytdlp, ['-J', videoUrl]);
       let stdout = '';
       let stderr = '';
@@ -128,20 +189,104 @@ const server = http.createServer(async (req, res) => {
         try {
           const info = JSON.parse(stdout);
           
-          // Map and filter formats
-          // We want formats that contain both video and audio, or audio-only
-          const formats = (info.formats || []).map(f => {
+          // Group and clean formats to avoid duplicates and low-quality options
+          const uniqueFormats = {};
+          
+          (info.formats || []).forEach(f => {
+            if (f.vcodec === 'none' && f.acodec === 'none') return; // Skip storyboard images
+            
+            let height = f.height;
+            let width = f.width;
+            
+            if (f.vcodec === 'none') {
+              height = 0; // Audio-only
+            } else if (!height) {
+              const match = (f.resolution || '').match(/(\d+)x(\d+)/);
+              if (match) {
+                height = parseInt(match[2]);
+                width = parseInt(match[1]);
+              } else {
+                const heightMatch = (f.format_note || '').match(/(\d+)p/);
+                if (heightMatch) height = parseInt(heightMatch[1]);
+              }
+            }
+            
+            if (!height && f.vcodec !== 'none') return;
+
+            const key = f.vcodec === 'none' ? 'audio' : `${height}p`;
+            
+            // Prefer formats with higher file size or direct HTTPS protocol over streaming protocols
+            const currentBest = uniqueFormats[key];
+            const isNewBetter = !currentBest || 
+              (f.filesize && (!currentBest.filesize || f.filesize > currentBest.filesize)) ||
+              (f.protocol === 'https' && currentBest.protocol !== 'https');
+              
+            if (isNewBetter) {
+              uniqueFormats[key] = {
+                formatId: f.format_id,
+                extension: f.ext,
+                height: height,
+                width: width,
+                filesize: f.filesize || f.filesize_approx || null,
+                hasVideo: f.vcodec !== 'none',
+                hasAudio: f.acodec !== 'none',
+                protocol: f.protocol || ''
+              };
+            }
+          });
+
+          // Convert back to array
+          const formatsList = Object.values(uniqueFormats);
+
+          // Split video and audio
+          const videoFormats = formatsList.filter(f => f.hasVideo);
+          const audioFormats = formatsList.filter(f => !f.hasVideo);
+
+          // Sort video formats by height descending (highest quality first)
+          videoFormats.sort((a, b) => b.height - a.height);
+
+          // Take only the top 4 video resolutions
+          const top4Video = videoFormats.slice(0, 4);
+
+          // Map to simplified user-facing options
+          const formats = top4Video.map(f => {
+            let label = `${f.height}p`;
+            if (f.height >= 720) label += ' HD';
+            if (f.height >= 1080) label = `${f.height}p Full HD`;
+            if (f.height >= 1440) label = `${f.height}p 2K`;
+            if (f.height >= 2160) label = `${f.height}p 4K`;
+            if (f.height >= 4320) label = `${f.height}p 8K`;
+            
+            if (f.filesize) {
+              const mb = (f.filesize / (1024 * 1024)).toFixed(1);
+              label += ` (~${mb} MB)`;
+            }
+            
             return {
-              formatId: f.format_id,
-              extension: f.ext,
-              resolution: f.resolution || (f.width && f.height ? `${f.width}x${f.height}` : null) || f.format_note || 'unknown',
-              filesize: f.filesize || f.filesize_approx || null,
-              hasVideo: f.vcodec !== 'none',
-              hasAudio: f.acodec !== 'none',
-              fps: f.fps || null,
-              note: f.format_note || ''
+              formatId: f.formatId,
+              extension: f.extension,
+              resolution: label,
+              hasVideo: true,
+              hasAudio: f.hasAudio
             };
-          }).filter(f => f.hasVideo || f.hasAudio);
+          });
+
+          // Add the single best audio format at the bottom
+          if (audioFormats.length > 0) {
+            audioFormats.sort((a, b) => (b.filesize || 0) - (a.filesize || 0));
+            const bestAudio = audioFormats[0];
+            let audioLabel = `Audio Only (${bestAudio.extension})`;
+            if (bestAudio.filesize) {
+              audioLabel += ` (~${(bestAudio.filesize / (1024 * 1024)).toFixed(1)} MB)`;
+            }
+            formats.push({
+              formatId: bestAudio.formatId,
+              extension: bestAudio.extension,
+              resolution: audioLabel,
+              hasVideo: false,
+              hasAudio: true
+            });
+          }
 
           res.writeHead(200, { 
             'Content-Type': 'application/json',
@@ -165,36 +310,92 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // API: Download/Stream Video
+  // API: Start download job (returns downloadId)
   if (pathname === '/api/download') {
     const videoUrl = parsedUrl.query.url;
     const formatId = parsedUrl.query.formatId;
+    const videoTitle = parsedUrl.query.title || 'video';
 
     if (!videoUrl || !formatId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: 'url and formatId parameters are required' }));
+      return res.end(JSON.stringify({ error: 'url and formatId are required' }));
     }
 
     try {
       const ytdlp = await ensureYtDlp();
-      
+      await ensureFfmpeg();
+
+      const downloadId = 'dl_' + Date.now();
+      // Use wildcard %(ext)s so yt-dlp uses the correct container format (e.g. mp4, mkv, mp3)
+      const outputPathTemplate = path.join(TEMP_DIR, `${downloadId}.%(ext)s`);
+
+      downloads[downloadId] = {
+        percent: 0,
+        status: 'downloading',
+        filePath: '',
+        filename: '',
+        userTitle: videoTitle
+      };
+
       res.writeHead(200, {
-        'Content-Type': 'application/octet-stream',
-        'Access-Control-Allow-Origin': '*',
-        'Content-Disposition': 'attachment'
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
       });
+      res.end(JSON.stringify({ downloadId }));
 
-      // Spawn yt-dlp to output to stdout (-)
-      const child = spawn(ytdlp, ['-f', formatId, '-o', '-', videoUrl]);
+      const formatStr = `${formatId}+bestaudio/best`;
+      const child = spawn(ytdlp, [
+        '-f', formatStr,
+        '--ffmpeg-location', __dirname,
+        '--remux-video', 'mp4', // Forces video streams to merge/remux to mp4
+        '-o', outputPathTemplate,
+        videoUrl
+      ]);
 
-      child.stdout.pipe(res);
+      child.stdout.on('data', (data) => {
+        const text = data.toString();
+        const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
+        if (match) {
+          downloads[downloadId].percent = parseFloat(match[1]);
+        }
+      });
 
       child.stderr.on('data', (data) => {
-        // Log progress/errors silently on server
+        const text = data.toString();
+        const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
+        if (match) {
+          downloads[downloadId].percent = parseFloat(match[1]);
+        }
       });
 
-      req.on('close', () => {
-        child.kill();
+      child.on('close', (code) => {
+        if (code === 0) {
+          // Scan temp directory for the created file starting with the downloadId
+          try {
+            const files = fs.readdirSync(TEMP_DIR);
+            const matchedFile = files.find(f => f.startsWith(downloadId));
+            
+            if (matchedFile) {
+              const ext = path.extname(matchedFile) || '.mp4';
+              const cleanTitle = downloads[downloadId].userTitle.replace(/[\\/*?:"<>|]/g, "_");
+              
+              downloads[downloadId].status = 'ready';
+              downloads[downloadId].percent = 100;
+              downloads[downloadId].filePath = path.join(TEMP_DIR, matchedFile);
+              downloads[downloadId].filename = `${cleanTitle}${ext}`;
+              console.log(`Download ${downloadId} ready as user-friendly name: ${downloads[downloadId].filename}`);
+            } else {
+              downloads[downloadId].status = 'error';
+              console.error(`Downloaded file not found for job ${downloadId}`);
+            }
+          } catch (e) {
+            downloads[downloadId].status = 'error';
+            console.error(`Error locating finished file:`, e);
+          }
+        } else {
+          downloads[downloadId].status = 'error';
+          console.error(`Download job ${downloadId} exited with error code ${code}`);
+        }
       });
 
     } catch (err) {
@@ -203,6 +404,56 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     }
+    return;
+  }
+
+  // API: Get download job status
+  if (pathname === '/api/progress') {
+    const id = parsedUrl.query.id;
+    const download = downloads[id];
+
+    if (!download) {
+      res.writeHead(404, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      return res.end(JSON.stringify({ error: 'Download job not found' }));
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end(JSON.stringify({
+      status: download.status,
+      percent: download.percent
+    }));
+    return;
+  }
+
+  // API: Stream the completed file
+  if (pathname === '/api/get-file') {
+    const id = parsedUrl.query.id;
+    const download = downloads[id];
+
+    if (!download || download.status !== 'ready' || !download.filePath || !fs.existsSync(download.filePath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
+      return res.end('File not ready or not found');
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Access-Control-Allow-Origin': '*',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(download.filename)}`
+    });
+
+    const fileStream = fs.createReadStream(download.filePath);
+    fileStream.pipe(res);
+
+    fileStream.on('end', () => {
+      // Clean up the temp file after streaming complete
+      fs.unlink(download.filePath, (err) => {
+        if (err) console.error("Error deleting temp file:", err);
+      });
+      delete downloads[id];
+    });
     return;
   }
 
