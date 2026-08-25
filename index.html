@@ -696,7 +696,32 @@
 </head>
 <body>
 
-<div class="app" id="app">
+<!-- PASSWORD PROTECTION SCREEN -->
+<div id="passwordOverlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: var(--bg-void); display: flex; align-items: center; justify-content: center; z-index: 99999; font-family: 'Inter', sans-serif;">
+  <div style="background: var(--bg-panel-solid); border: 1px solid var(--hairline); border-radius: 12px; padding: 32px; width: 90%; max-width: 400px; box-shadow: 0 12px 40px rgba(0,0,0,0.5); text-align: center; display: flex; flex-direction: column; gap: 20px;">
+    <div>
+      <h2 style="font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; color: var(--text-1); margin: 0 0 6px 0; letter-spacing: -0.02em;">Access Required</h2>
+      <p style="font-size: 13px; color: var(--text-3); margin: 0;">This application is password protected.</p>
+    </div>
+    
+    <div style="position: relative; display: flex; flex-direction: column; text-align: left; gap: 6px;">
+      <label style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-2); letter-spacing: 0.05em;">Password</label>
+      <div style="position: relative; display: flex; align-items: center;">
+        <input type="password" id="appPasswordInput" placeholder="Enter password" style="width: 100%; padding: 12px 40px 12px 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--hairline); border-radius: 6px; color: var(--text-1); font-size: 14px; outline: none; transition: border-color 0.2s;">
+        <button id="togglePasswordVisibilityBtn" type="button" style="position: absolute; right: 12px; background: none; border: none; color: var(--text-3); cursor: pointer; display: flex; align-items: center; padding: 0;">
+          <svg id="eyeIcon" style="width: 18px; height: 18px; fill: currentColor;" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+        </button>
+      </div>
+      <div id="passwordError" style="font-size: 12px; color: var(--danger); display: none; margin-top: 4px; font-weight: 500;">Incorrect password. Please try again.</div>
+    </div>
+    
+    <button id="submitPasswordBtn" style="width: 100%; padding: 12px; background: var(--amber); border: none; border-radius: 6px; color: #241703; font-family: 'Space Grotesk', sans-serif; font-size: 14.5px; font-weight: 700; cursor: pointer; transition: background-color 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;">
+      Unlock Player
+    </button>
+  </div>
+</div>
+
+<div class="app" id="app" style="display: none;">
 
   <!-- STAGE -->
   <div class="stage-col">
@@ -920,9 +945,79 @@
 </div>
 
 <script>
+  // --- PASSWORD PROTECTION CONFIGURATION ---
+  // SECURITY NOTICE: This is frontend access protection. If deployed on static hosting sites (like GitHub Pages),
+  // a knowledgeable user can inspect the source code in their browser developer tools to find this password.
+  // This does not provide cryptographic or server-side security.
+  const ACCESS_PASSWORD = "HPZBOOK2003";
+
+  // Check sessionStorage immediately
+  (function() {
+    const isUnlocked = sessionStorage.getItem('videoPlayerUnlocked') === 'true';
+    const overlay = document.getElementById('passwordOverlay');
+    const mainApp = document.getElementById('app');
+    if (isUnlocked) {
+      if (overlay) overlay.style.display = 'none';
+      if (mainApp) mainApp.style.display = 'grid';
+    } else {
+      if (overlay) overlay.style.display = 'flex';
+      if (mainApp) mainApp.style.display = 'none';
+    }
+  })();
+
   // DOM Elements
   const app = document.getElementById('app');
   const mainVideo = document.getElementById('mainVideo');
+
+  // Password UI Elements
+  const passwordOverlay = document.getElementById('passwordOverlay');
+  const appPasswordInput = document.getElementById('appPasswordInput');
+  const togglePasswordVisibilityBtn = document.getElementById('togglePasswordVisibilityBtn');
+  const eyeIcon = document.getElementById('eyeIcon');
+  const passwordError = document.getElementById('passwordError');
+  const submitPasswordBtn = document.getElementById('submitPasswordBtn');
+
+  function verifyPassword() {
+    if (appPasswordInput.value === ACCESS_PASSWORD) {
+      sessionStorage.setItem('videoPlayerUnlocked', 'true');
+      passwordOverlay.style.display = 'none';
+      app.style.display = 'grid';
+      // Focus on main upload prompt if no video loaded
+      setTimeout(() => {
+        if (uploadPrompt && uploadPrompt.style.display !== 'none') {
+          uploadPrompt.focus();
+        }
+      }, 50);
+    } else {
+      passwordError.style.display = 'block';
+      appPasswordInput.style.borderColor = 'var(--danger)';
+    }
+  }
+
+  if (submitPasswordBtn) {
+    submitPasswordBtn.onclick = verifyPassword;
+  }
+  if (appPasswordInput) {
+    appPasswordInput.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        verifyPassword();
+      } else {
+        passwordError.style.display = 'none';
+        appPasswordInput.style.borderColor = 'var(--hairline)';
+      }
+    };
+  }
+  if (togglePasswordVisibilityBtn) {
+    togglePasswordVisibilityBtn.onclick = () => {
+      if (appPasswordInput.type === 'password') {
+        appPasswordInput.type = 'text';
+        eyeIcon.innerHTML = `<path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zm0 8c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm0-11C7 4 2.73 7.11 1 11.5 2.73 15.89 7 19 12 19s9.27-3.11 11-7.5C21.27 7.11 17 4 12 4zm0 13c-3.04 0-5.61-1.74-6.83-4.3C6.39 10.14 8.96 8.4 12 8.4s5.61 1.74 6.83 4.3C17.61 15.26 15.04 17 12 17z"/>`;
+      } else {
+        appPasswordInput.type = 'password';
+        eyeIcon.innerHTML = `<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>`;
+      }
+    };
+  }
   const videoFileSelector = document.getElementById('videoFileSelector');
   const uploadPrompt = document.getElementById('uploadPrompt');
   const videoStage = document.getElementById('videoStage');
