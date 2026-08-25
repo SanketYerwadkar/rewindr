@@ -1693,20 +1693,19 @@
               },
               body: JSON.stringify({
                 url: urlVal,
-                vQuality: qualityMap[formatId] || '720',
-                isAudioOnly: isAudio,
-                filenamePattern: 'basic'
+                videoQuality: qualityMap[formatId] || '720',
+                downloadMode: isAudio ? 'audio' : 'video'
               })
             });
 
             if (!response.ok) {
               const errData = await response.json().catch(() => ({}));
-              throw new Error(errData.text || "Download service failed.");
+              throw new Error(errData.error?.context || errData.text || "Download service failed.");
             }
 
             const data = await response.json();
             if (data.status === 'error') {
-              throw new Error(data.text || "Failed to download.");
+              throw new Error(data.error?.context || data.text || "Failed to download.");
             }
 
             downloadUrl = data.url;
