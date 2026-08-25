@@ -796,15 +796,21 @@
           <span class="dot" style="width:6px; height:6px; border-radius:50%; background:var(--amber); box-shadow:0 0 0 3px var(--amber-dim); flex-shrink: 0;"></span>
           <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;">Now playing: <strong id="nowPlayingText" style="color: var(--text-1); font-weight: 500;"></strong></span>
         </div>
-        <div class="panel-toolbar">
-          <div class="search-box">
+        <div class="panel-toolbar" style="flex-wrap: wrap; gap: 6px;">
+          <div class="search-box" style="flex: 1 1 100%;">
             <svg viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 10-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 110-9 4.5 4.5 0 010 9z"/></svg>
             <input type="text" id="searchInput" placeholder="Search points">
           </div>
-          <button class="download-trigger-btn" id="dlBtn" title="Download video from link">
-            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>Download
+          <button class="download-trigger-btn" id="dlBtn" title="Download video from link" style="font-size: 11.5px; padding: 0 8px; height: 32px;">
+            <svg viewBox="0 0 24 24" style="width:13px; height:13px;"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>Download
           </button>
-          <button class="add-btn" id="addBtn"><svg viewBox="0 0 24 24"><path d="M11 5v6H5v2h6v6h2v-6h6v-2h-6V5z"/></svg>Add</button>
+          <button class="add-btn" id="exportBtn" title="Copy Points to Clipboard" style="font-size: 11.5px; padding: 0 8px; height: 32px; background:var(--steel-dim); color:var(--text-1); border:1px solid rgba(91,122,140,0.4);">
+            <svg viewBox="0 0 24 24" style="width:13px; height:13px; fill:currentColor;"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>Copy
+          </button>
+          <button class="add-btn" id="importBtn" title="Import Points from Clipboard" style="font-size: 11.5px; padding: 0 8px; height: 32px; background:var(--steel-dim); color:var(--text-1); border:1px solid rgba(91,122,140,0.4);">
+            <svg viewBox="0 0 24 24" style="width:13px; height:13px; fill:currentColor;"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>Import
+          </button>
+          <button class="add-btn" id="addBtn" style="font-size: 11.5px; padding: 0 8px; height: 32px;"><svg viewBox="0 0 24 24" style="width:13px; height:13px;"><path d="M11 5v6H5v2h6v6h2v-6h6v-2h-6V5z"/></svg>Add</button>
         </div>
       </div>
 
@@ -949,6 +955,8 @@
   const searchInput = document.getElementById('searchInput');
   const addBtn = document.getElementById('addBtn');
   const emptyAddBtn = document.getElementById('emptyAddBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const importBtn = document.getElementById('importBtn');
   const collapseBtn = document.getElementById('collapseBtn');
   const expandBtn = document.getElementById('expandBtn');
   
@@ -2369,6 +2377,85 @@
         stopHeadphonePolling();
       }
     });
+  }
+
+  // --- COPY / EXPORT POINTS ---
+  exportBtn.onclick = () => {
+    if (points.length === 0) {
+      alert("No points to export.");
+      return;
+    }
+    const jsonStr = JSON.stringify(points, null, 2);
+    navigator.clipboard.writeText(jsonStr).then(() => {
+      alert("Points data copied to clipboard!");
+    }).catch(err => {
+      alert("Failed to copy points: " + err.message);
+    });
+  };
+
+  // --- IMPORT POINTS ---
+  importBtn.onclick = () => {
+    navigator.clipboard.readText().then(text => {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          // Validate structure
+          const valid = parsed.every(p => p.title && p.timestamp);
+          if (valid) {
+            parsed.forEach(newPt => {
+              if (!newPt.id) newPt.id = 'pt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+              const idx = points.findIndex(p => p.id === newPt.id);
+              if (idx !== -1) {
+                points[idx] = newPt;
+              } else {
+                points.push(newPt);
+              }
+            });
+            savePoints();
+            alert(`Successfully imported ${parsed.length} points!`);
+          } else {
+            alert("Invalid points format. Each point must have a title and timestamp.");
+          }
+        } else {
+          alert("Invalid points format: Data must be a JSON array.");
+        }
+      } catch (e) {
+        // Fallback prompt
+        handleTextImport();
+      }
+    }).catch(() => {
+      handleTextImport();
+    });
+  };
+
+  function handleTextImport() {
+    const pasteText = prompt("Paste your exported Points JSON data here:");
+    if (!pasteText) return;
+    try {
+      const parsed = JSON.parse(pasteText);
+      if (Array.isArray(parsed)) {
+        const valid = parsed.every(p => p.title && p.timestamp);
+        if (valid) {
+          parsed.forEach(newPt => {
+            if (!newPt.id) newPt.id = 'pt_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            const idx = points.findIndex(p => p.id === newPt.id);
+            if (idx !== -1) {
+              points[idx] = newPt;
+            } else {
+              points.push(newPt);
+            }
+          });
+          savePoints();
+          alert(`Successfully imported ${parsed.length} points!`);
+        } else {
+          alert("Invalid format: Points must have 'title' and 'timestamp'.");
+        }
+      } else {
+        alert("Invalid format: Data must be a JSON array.");
+      }
+    } catch (err) {
+      alert("Failed to parse JSON data.");
+    }
   }
 
   // --- LIVE RELOAD CLIENT CODE ---

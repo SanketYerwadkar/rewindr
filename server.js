@@ -9,6 +9,7 @@ const PORT = 3001;
 const YTDLP_PATH = path.join(__dirname, 'yt-dlp.exe');
 const FFMPEG_PATH = path.join(__dirname, 'ffmpeg.exe');
 const FFPROBE_PATH = path.join(__dirname, 'ffprobe.exe');
+const ARIA2_PATH = path.join(__dirname, 'aria2c.exe');
 const TEMP_DIR = path.join(__dirname, 'temp_downloads');
 
 // Ensure temp directory exists
@@ -104,9 +105,73 @@ function ensureFfmpeg() {
   return ffmpegPromise;
 }
 
+let aria2Promise = null;
+
+// Helper to download aria2c if not present
+function ensureAria2() {
+  if (aria2Promise) return aria2Promise;
+
+  aria2Promise = new Promise((resolve, reject) => {
+    if (fs.existsSync(ARIA2_PATH)) {
+      return resolve(ARIA2_PATH);
+    }
+    console.log("aria2c.exe binary not found. Downloading Windows binary...");
+    
+    // Downloading stable aria2c win-64 build
+    const psCommand = `
+      $ProgressPreference = 'SilentlyContinue';
+      Write-Host "Downloading aria2...";
+      Invoke-WebRequest -Uri 'https://github.com/aria2/aria2/releases/download/release-1.36.0/aria2-1.36.0-win-64bit-build1.zip' -OutFile 'aria2.zip';
+      Write-Host "Extracting aria2c.exe...";
+      Expand-Archive -Path 'aria2.zip' -DestinationPath 'aria2_temp' -Force;
+      Copy-Item -Path 'aria2_temp\\*\\aria2c.exe' -Destination '${__dirname}' -Force;
+      Remove-Item 'aria2.zip' -Force;
+      Remove-Item 'aria2_temp' -Recurse -Force;
+    `;
+    
+    const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-Command', psCommand]);
+    
+    child.stdout.on('data', (data) => {
+      console.log(data.toString().trim());
+    });
+    
+    child.stderr.on('data', (data) => {
+      console.error(data.toString().trim());
+    });
+    
+    child.on('close', (code) => {
+      if (code === 0 && fs.existsSync(ARIA2_PATH)) {
+        console.log("aria2c.exe downloaded and extracted successfully.");
+        resolve(ARIA2_PATH);
+      } else {
+        aria2Promise = null; // reset to allow retry
+        reject(new Error("Failed to download or extract aria2c.exe binary. Code: " + code));
+      }
+    });
+  });
+
+  return aria2Promise;
+}
+
+function updateYtDlp() {
+  return new Promise((resolve) => {
+    console.log("Checking for yt-dlp updates...");
+    const child = spawn(YTDLP_PATH, ['-U']);
+    let output = '';
+    child.stdout.on('data', (d) => { output += d.toString(); });
+    child.stderr.on('data', (d) => { output += d.toString(); });
+    child.on('close', (code) => {
+      console.log(`yt-dlp update finished with code ${code}. Output:\n${output.trim()}`);
+      resolve();
+    });
+  });
+}
+
 // Start ensuring components are present right away
 ensureYtDlp()
+  .then(() => updateYtDlp())
   .then(() => ensureFfmpeg())
+  .then(() => ensureAria2())
   .catch(err => console.error("Error setting up backend binaries:", err));
 
 const MIME_TYPES = {
@@ -236,7 +301,21 @@ const server = http.createServer(async (req, res) => {
           });
 
           // Convert back to array
-          const formatsList = Object.values(uniqueFormats);
+          let formatsList = Object.values(uniqueFormats);
+
+          // Fallback if no formats are parsed but a direct streaming url is available
+          if (formatsList.length === 0 && info.url) {
+            formatsList.push({
+              formatId: 'best',
+              extension: info.ext || 'mp4',
+              height: info.height || 720,
+              width: info.width || 1280,
+              filesize: info.filesize || info.filesize_approx || null,
+              hasVideo: true,
+              hasAudio: true,
+              protocol: 'https'
+            });
+          }
 
           // Split video and audio
           const videoFormats = formatsList.filter(f => f.hasVideo);
@@ -343,34 +422,63 @@ const server = http.createServer(async (req, res) => {
       });
       res.end(JSON.stringify({ downloadId }));
 
-      const formatStr = `${formatId}+bestaudio/best`;
-      const child = spawn(ytdlp, [
-        '-f', formatStr,
-        '--ffmpeg-location', __dirname,
-        '--remux-video', 'mp4', // Forces video streams to merge/remux to mp4
-        '-o', outputPathTemplate,
-        videoUrl
-      ]);
+      const isAudioOnly = formatId === 'audio' || formatId.toLowerCase().includes('audio') || formatId === 'bestaudio';
+      const formatStr = isAudioOnly ? `${formatId}/bestaudio/best` : `${formatId}+bestaudio/${formatId}/best`;
 
-      child.stdout.on('data', (data) => {
-        const text = data.toString();
-        const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
-        if (match) {
-          downloads[downloadId].percent = parseFloat(match[1]);
-        }
-      });
+      function runYtdlpJob(useExternal) {
+        return new Promise((resolve, reject) => {
+          const args = [
+            '-f', formatStr,
+            '--ffmpeg-location', __dirname,
+            '--newline', // Forces output of progress percentage on new lines
+            '--remux-video', 'mp4', // Forces video streams to merge/remux to mp4
+            '--postprocessor-args', 'ffmpeg:-threads 0 -preset ultrafast', // Maximize multi-threading and compression speed in ffmpeg
+            '-o', outputPathTemplate,
+            videoUrl
+          ];
 
-      child.stderr.on('data', (data) => {
-        const text = data.toString();
-        const match = text.match(/\[download\]\s+(\d+\.\d+)%/);
-        if (match) {
-          downloads[downloadId].percent = parseFloat(match[1]);
-        }
-      });
+          if (useExternal && fs.existsSync(ARIA2_PATH)) {
+            args.push('--external-downloader', ARIA2_PATH);
+            args.push('--external-downloader-args', 'aria2c:-j 16 -x 16 -s 16 -k 1M');
+          }
 
-      child.on('close', (code) => {
-        if (code === 0) {
-          // Scan temp directory for the created file starting with the downloadId
+          console.log(`Spawning yt-dlp (useExternal=${useExternal}) with args:`, args);
+          const child = spawn(ytdlp, args);
+
+          child.stdout.on('data', (data) => {
+            const text = data.toString();
+            // Match any progress percentage like 10%, 15.4%, or (45%) from stdout stream
+            const match = text.match(/(\d+(?:\.\d+)?)%/);
+            if (match) {
+              downloads[downloadId].percent = parseFloat(match[1]);
+            }
+          });
+
+          child.stderr.on('data', (data) => {
+            const text = data.toString();
+            const match = text.match(/(\d+(?:\.\d+)?)%/);
+            if (match) {
+              downloads[downloadId].percent = parseFloat(match[1]);
+            }
+          });
+
+          child.on('close', (code) => {
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`yt-dlp process exited with code ${code}`));
+            }
+          });
+        });
+      }
+
+      // Run download job with automatic fallback to native downloader if external fails
+      runYtdlpJob(true)
+        .catch((err) => {
+          console.warn(`[aria2c failed] for job ${downloadId}. Retrying using native downloader. Error: ${err.message}`);
+          return runYtdlpJob(false);
+        })
+        .then(() => {
           try {
             const files = fs.readdirSync(TEMP_DIR);
             const matchedFile = files.find(f => f.startsWith(downloadId));
@@ -383,7 +491,7 @@ const server = http.createServer(async (req, res) => {
               downloads[downloadId].percent = 100;
               downloads[downloadId].filePath = path.join(TEMP_DIR, matchedFile);
               downloads[downloadId].filename = `${cleanTitle}${ext}`;
-              console.log(`Download ${downloadId} ready as user-friendly name: ${downloads[downloadId].filename}`);
+              console.log(`Download ${downloadId} completed successfully.`);
             } else {
               downloads[downloadId].status = 'error';
               console.error(`Downloaded file not found for job ${downloadId}`);
@@ -392,11 +500,11 @@ const server = http.createServer(async (req, res) => {
             downloads[downloadId].status = 'error';
             console.error(`Error locating finished file:`, e);
           }
-        } else {
+        })
+        .catch((finalErr) => {
           downloads[downloadId].status = 'error';
-          console.error(`Download job ${downloadId} exited with error code ${code}`);
-        }
-      });
+          console.error(`Download job ${downloadId} completely failed after retry:`, finalErr.message);
+        });
 
     } catch (err) {
       if (!res.headersSent) {
