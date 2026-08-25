@@ -1734,7 +1734,8 @@
             
             for (const inv of invidiousInstances) {
               try {
-                const invRes = await fetch(`${inv}/api/v1/videos/${ytId}`);
+                const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`${inv}/api/v1/videos/${ytId}`)}`;
+                const invRes = await fetch(proxyUrl);
                 if (!invRes.ok) continue;
                 
                 const invData = await invRes.json();
