@@ -1070,10 +1070,51 @@
     togglePlayPause();
   });
 
+  // --- HEADPHONE CONNECTION CHECK ---
+  async function checkHeadphones() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter(d => d.kind === 'audiooutput');
+      
+      // Look for typical headphone/headset strings in device labels
+      const hasHeadphones = outputs.some(d => {
+        const lbl = d.label.toLowerCase();
+        return lbl.includes('headphone') || lbl.includes('headset') || lbl.includes('earphone') || lbl.includes('jack');
+      });
+      return hasHeadphones;
+    } catch (err) {
+      console.error("Error enumerating devices:", err);
+      return false;
+    }
+  }
+
   // --- VIDEO PLAYER PLAYBACK CONTROLS ---
-  function togglePlayPause() {
+  async function togglePlayPause() {
     if (!mainVideo.src) return;
     if (mainVideo.paused) {
+      // 1. Request audio permission temporarily to unlock device labels if they are blank
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const needsPermission = devices.some(d => d.kind === 'audiooutput' && d.label === "");
+        if (needsPermission) {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(t => t.stop());
+        }
+      } catch (err) {
+        alert("Audio device permission is required to detect connected headphones.");
+        return;
+      }
+
+      // 2. Check if headphones are connected
+      const headphonesConnected = await checkHeadphones();
+      if (!headphonesConnected) {
+        alert("Headphones not detected! Please plug in headphones (jack pin) to play the video.");
+        mainVideo.pause();
+        setVolume(0);
+        updatePlayPauseState();
+        return;
+      }
+
       mainVideo.play().catch(() => {});
     } else {
       mainVideo.pause();
@@ -1966,13 +2007,51 @@
   });
 
   // --- HEADPHONE DISCONNECT DETECTION ---
-  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-    navigator.mediaDevices.addEventListener('devicechange', () => {
+  let headphonePollInterval = null;
+
+  async function enforceHeadphonesCheck() {
+    const headphonesConnected = await checkHeadphones();
+    if (!headphonesConnected) {
       if (mainVideo && !mainVideo.paused) {
         mainVideo.pause();
         setVolume(0);
         updatePlayPauseState();
-        console.log("Audio device change detected. Paused video and muted audio.");
+        alert("Headphones unplugged! Video paused and audio set to zero.");
+      }
+      stopHeadphonePolling();
+    }
+  }
+
+  function startHeadphonePolling() {
+    if (headphonePollInterval) clearInterval(headphonePollInterval);
+    // Poll output devices list every 100ms for instantaneous disconnect responses
+    headphonePollInterval = setInterval(enforceHeadphonesCheck, 100);
+  }
+
+  function stopHeadphonePolling() {
+    if (headphonePollInterval) {
+      clearInterval(headphonePollInterval);
+      headphonePollInterval = null;
+    }
+  }
+
+  // Hook poll lifecycle to playback events
+  mainVideo.addEventListener('play', startHeadphonePolling);
+  mainVideo.addEventListener('pause', stopHeadphonePolling);
+
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', async () => {
+      // Immediate event fallback: pause and mute first to prevent any speaker sound leak
+      if (mainVideo && !mainVideo.paused) {
+        mainVideo.pause();
+        setVolume(0);
+        updatePlayPauseState();
+      }
+      
+      const headphonesConnected = await checkHeadphones();
+      if (!headphonesConnected) {
+        alert("Headphones unplugged! Video paused and audio set to zero.");
+        stopHeadphonePolling();
       }
     });
   }
