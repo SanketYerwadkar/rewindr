@@ -207,7 +207,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Static files server
-  let filePath = path.join(__dirname, pathname === '/' ? 'video-points-player.html' : pathname);
+  let filePath = path.join(__dirname, pathname === '/' ? 'index.html' : pathname);
   const ext = path.extname(filePath);
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
