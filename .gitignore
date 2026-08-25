@@ -1,0 +1,11 @@
+# Ignore local yt-dlp executable as server downloads it automatically
+yt-dlp.exe
+
+# Ignore local node modules (if any)
+node_modules/
+
+# Ignore system generated logs / configs
+.gemini/
+.system_generated/
+.agents/
+*.log
