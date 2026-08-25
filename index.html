@@ -1183,6 +1183,8 @@
         return;
       }
 
+      // Restore video visibility
+      mainVideo.style.opacity = '1';
       mainVideo.play().catch(() => {});
     } else {
       mainVideo.pause();
@@ -1346,6 +1348,7 @@
     // Set video src
     mainVideo.src = item.objectURL;
     mainVideo.style.display = 'block';
+    mainVideo.style.opacity = '1'; // Ensure video is visible
     uploadPrompt.style.display = 'none';
 
     return new Promise((resolve) => {
@@ -2339,6 +2342,12 @@
         mainVideo.pause();
         setVolume(0);
         updatePlayPauseState();
+        // Privacy shield: hide video frame instantly
+        mainVideo.style.opacity = '0';
+        // Exit fullscreen when unplugged
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
         alert("Headphones unplugged! Video paused and audio set to zero.");
       }
       stopHeadphonePolling();
@@ -2369,6 +2378,12 @@
         mainVideo.pause();
         setVolume(0);
         updatePlayPauseState();
+        // Privacy shield: hide video frame instantly
+        mainVideo.style.opacity = '0';
+        // Exit fullscreen when unplugged
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
       }
       
       const headphonesConnected = await checkHeadphones();
