@@ -1672,6 +1672,8 @@
         const instances = [
           'https://cobalt.api.ryzetech.live/api/json',
           'https://api.cobalt.tools/api/json',
+          'https://cobalt.q69.de/api/json',
+          'https://cobalt.sh.al/api/json',
           'https://cobalt-api.kwi.im/api/json',
           'https://co.wuk.sh/api/json'
         ];
@@ -1740,7 +1742,7 @@
         }, 1500);
 
       } catch (err) {
-        alert(`Download failed: ${err.message}\n(Please make sure the video URL is correct and public)`);
+        alert(`Download failed: Public servers are currently blocked or rate-limited by YouTube's anti-downloader measures.\n\nTo download videos successfully without limits, run the project locally (node server.js) and open http://localhost:3001 in your browser!`);
         downloadStatusText.textContent = "Download failed.";
       } finally {
         startDownloadBtn.disabled = false;
