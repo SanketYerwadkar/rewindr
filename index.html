@@ -1734,7 +1734,7 @@
             
             for (const inv of invidiousInstances) {
               try {
-                const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(`${inv}/api/v1/videos/${ytId}`)}`;
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`${inv}/api/v1/videos/${ytId}`)}`;
                 const invRes = await fetch(proxyUrl);
                 if (!invRes.ok) continue;
                 
@@ -1751,7 +1751,11 @@
                 }
                 
                 if (selectedStream && selectedStream.url) {
-                  downloadUrl = selectedStream.url;
+                  let finalUrl = selectedStream.url;
+                  if (finalUrl.startsWith('/')) {
+                    finalUrl = `${inv}${finalUrl}`;
+                  }
+                  downloadUrl = finalUrl;
                   success = true;
                   break;
                 }
