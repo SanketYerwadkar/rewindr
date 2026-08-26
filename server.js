@@ -321,28 +321,31 @@ const server = http.createServer(async (req, res) => {
           const videoFormats = formatsList.filter(f => f.hasVideo);
           const audioFormats = formatsList.filter(f => !f.hasVideo);
 
+          // Find best audio size for combined size calculation
+          audioFormats.sort((a, b) => (b.filesize || 0) - (a.filesize || 0));
+          const bestAudioSize = audioFormats[0] ? (audioFormats[0].filesize || 0) : 0;
+
           // Sort video formats by height descending (highest quality first)
           videoFormats.sort((a, b) => b.height - a.height);
 
-          // Take only the top 4 video resolutions
-          const top4Video = videoFormats.slice(0, 4);
-
-          // Map to simplified user-facing options
-          const formats = top4Video.map(f => {
+          // Map all unique video resolutions
+          const formats = videoFormats.map(f => {
             let label = `${f.height}p`;
-            if (f.height >= 720) label += ' HD';
-            if (f.height >= 1080) label = `${f.height}p Full HD`;
-            if (f.height >= 1440) label = `${f.height}p 2K`;
-            if (f.height >= 2160) label = `${f.height}p 4K`;
+            if (f.height >= 720 && f.height < 1080) label += ' HD';
+            if (f.height >= 1080 && f.height < 1440) label = `${f.height}p Full HD`;
+            if (f.height >= 1440 && f.height < 2160) label = `${f.height}p 2K`;
+            if (f.height >= 2160 && f.height < 4320) label = `${f.height}p 4K`;
             if (f.height >= 4320) label = `${f.height}p 8K`;
             
-            if (f.filesize) {
-              const mb = (f.filesize / (1024 * 1024)).toFixed(1);
+            const totalBytes = (f.filesize || 0) + (f.hasAudio ? 0 : bestAudioSize);
+            if (totalBytes > 0) {
+              const mb = (totalBytes / (1024 * 1024)).toFixed(1);
               label += ` (~${mb} MB)`;
             }
             
             return {
               formatId: f.formatId,
+              height: f.height,
               extension: f.extension,
               resolution: label,
               hasVideo: true,
@@ -352,7 +355,6 @@ const server = http.createServer(async (req, res) => {
 
           // Add the single best audio format at the bottom
           if (audioFormats.length > 0) {
-            audioFormats.sort((a, b) => (b.filesize || 0) - (a.filesize || 0));
             const bestAudio = audioFormats[0];
             let audioLabel = `Audio Only (${bestAudio.extension})`;
             if (bestAudio.filesize) {
@@ -360,6 +362,7 @@ const server = http.createServer(async (req, res) => {
             }
             formats.push({
               formatId: bestAudio.formatId,
+              height: 0,
               extension: bestAudio.extension,
               resolution: audioLabel,
               hasVideo: false,
@@ -393,6 +396,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/download') {
     const videoUrl = parsedUrl.query.url;
     const formatId = parsedUrl.query.formatId;
+    const formatHeight = parsedUrl.query.height ? parseInt(parsedUrl.query.height) : null;
     const videoTitle = parsedUrl.query.title || 'video';
 
     if (!videoUrl || !formatId) {
@@ -423,65 +427,51 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ downloadId }));
 
       const isAudioOnly = formatId === 'audio' || formatId.toLowerCase().includes('audio') || formatId === 'bestaudio';
-      const formatStr = isAudioOnly ? `${formatId}/bestaudio/best` : `${formatId}+bestaudio/${formatId}/best`;
-
-      function runYtdlpJob(useExternal) {
-        return new Promise((resolve, reject) => {
-          const args = [
-            '-f', formatStr,
-            '--ffmpeg-location', __dirname,
-            '--newline', // Forces output of progress percentage on new lines
-            '--remux-video', 'mp4', // Forces video streams to merge/remux to mp4
-            '--postprocessor-args', 'ffmpeg:-threads 0 -preset ultrafast', // Maximize multi-threading and compression speed in ffmpeg
-            '-o', outputPathTemplate,
-            videoUrl
-          ];
-
-          if (useExternal && fs.existsSync(ARIA2_PATH)) {
-            args.push('--external-downloader', ARIA2_PATH);
-            args.push('--external-downloader-args', 'aria2c:-j 16 -x 16 -s 16 -k 1M');
-          }
-
-          console.log(`Spawning yt-dlp (useExternal=${useExternal}) with args:`, args);
-          const child = spawn(ytdlp, args);
-
-          child.stdout.on('data', (data) => {
-            const text = data.toString();
-            // Match any progress percentage like 10%, 15.4%, or (45%) from stdout stream
-            const match = text.match(/(\d+(?:\.\d+)?)%/);
-            if (match) {
-              downloads[downloadId].percent = parseFloat(match[1]);
-            }
-          });
-
-          child.stderr.on('data', (data) => {
-            const text = data.toString();
-            const match = text.match(/(\d+(?:\.\d+)?)%/);
-            if (match) {
-              downloads[downloadId].percent = parseFloat(match[1]);
-            }
-          });
-
-          child.on('close', (code) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`yt-dlp process exited with code ${code}`));
-            }
-          });
-        });
+      let formatStr;
+      if (isAudioOnly) {
+        formatStr = `${formatId}/bestaudio/best`;
+      } else if (formatHeight) {
+        formatStr = `bestvideo[height<=${formatHeight}]+bestaudio/bestvideo[format_id=${formatId}]+bestaudio/${formatId}+bestaudio/best`;
+      } else {
+        formatStr = `${formatId}+bestaudio/bestvideo+bestaudio/best`;
       }
 
-      // Run download job with automatic fallback to native downloader if external fails
-      runYtdlpJob(true)
-        .catch((err) => {
-          console.warn(`[aria2c failed] for job ${downloadId}. Retrying using native downloader. Error: ${err.message}`);
-          return runYtdlpJob(false);
-        })
-        .then(() => {
+      const args = [
+        '-f', formatStr,
+        '--ffmpeg-location', __dirname,
+        '--newline',
+        '-N', '8',
+        '--buffer-size', '16M',
+        '--remux-video', 'mp4',
+        '--postprocessor-args', 'ffmpeg:-threads 0 -preset ultrafast',
+        '-o', outputPathTemplate,
+        videoUrl
+      ];
+
+      console.log(`Spawning yt-dlp with optimized concurrent args:`, args);
+      const child = spawn(ytdlp, args);
+
+      child.stdout.on('data', (data) => {
+        const text = data.toString();
+        const match = text.match(/(\d+(?:\.\d+)?)%/);
+        if (match) {
+          downloads[downloadId].percent = parseFloat(match[1]);
+        }
+      });
+
+      child.stderr.on('data', (data) => {
+        const text = data.toString();
+        const match = text.match(/(\d+(?:\.\d+)?)%/);
+        if (match) {
+          downloads[downloadId].percent = parseFloat(match[1]);
+        }
+      });
+
+      child.on('close', (code) => {
+        if (code === 0) {
           try {
             const files = fs.readdirSync(TEMP_DIR);
-            const matchedFile = files.find(f => f.startsWith(downloadId));
+            const matchedFile = files.find(f => f.startsWith(downloadId) && !f.endsWith('.part') && !f.endsWith('.ytdl'));
             
             if (matchedFile) {
               const ext = path.extname(matchedFile) || '.mp4';
@@ -491,7 +481,7 @@ const server = http.createServer(async (req, res) => {
               downloads[downloadId].percent = 100;
               downloads[downloadId].filePath = path.join(TEMP_DIR, matchedFile);
               downloads[downloadId].filename = `${cleanTitle}${ext}`;
-              console.log(`Download ${downloadId} completed successfully.`);
+              console.log(`Download ${downloadId} completed successfully: ${downloads[downloadId].filename}`);
             } else {
               downloads[downloadId].status = 'error';
               console.error(`Downloaded file not found for job ${downloadId}`);
@@ -500,11 +490,11 @@ const server = http.createServer(async (req, res) => {
             downloads[downloadId].status = 'error';
             console.error(`Error locating finished file:`, e);
           }
-        })
-        .catch((finalErr) => {
+        } else {
           downloads[downloadId].status = 'error';
-          console.error(`Download job ${downloadId} completely failed after retry:`, finalErr.message);
-        });
+          console.error(`yt-dlp exited with code ${code}`);
+        }
+      });
 
     } catch (err) {
       if (!res.headersSent) {
@@ -531,7 +521,8 @@ const server = http.createServer(async (req, res) => {
     });
     res.end(JSON.stringify({
       status: download.status,
-      percent: download.percent
+      percent: download.percent,
+      filename: download.filename
     }));
     return;
   }
@@ -546,22 +537,33 @@ const server = http.createServer(async (req, res) => {
       return res.end('File not ready or not found');
     }
 
-    res.writeHead(200, {
-      'Content-Type': 'application/octet-stream',
-      'Access-Control-Allow-Origin': '*',
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(download.filename)}`
-    });
-
-    const fileStream = fs.createReadStream(download.filePath);
-    fileStream.pipe(res);
-
-    fileStream.on('end', () => {
-      // Clean up the temp file after streaming complete
-      fs.unlink(download.filePath, (err) => {
-        if (err) console.error("Error deleting temp file:", err);
+    try {
+      const stat = fs.statSync(download.filePath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': stat.size,
+        'Access-Control-Allow-Origin': '*',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(download.filename)}`
       });
-      delete downloads[id];
-    });
+
+      const fileStream = fs.createReadStream(download.filePath);
+      fileStream.pipe(res);
+
+      fileStream.on('close', () => {
+        // Schedule cleanup after 2 minutes so repeated requests or retries succeed
+        setTimeout(() => {
+          if (download && download.filePath && fs.existsSync(download.filePath)) {
+            fs.unlink(download.filePath, () => {});
+          }
+          delete downloads[id];
+        }, 120000);
+      });
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error reading file: ' + err.message);
+      }
+    }
     return;
   }
 

@@ -2262,34 +2262,19 @@
     // --- LOCAL STREAMING DOWNLOAD PATH ---
     const selectedFormat = fetchedInfo.formats.find(f => f.formatId === formatId);
     const suggestedExt = selectedFormat ? selectedFormat.extension : 'mp4';
-    const suggestedName = `${fetchedInfo.title.replace(/[\\/*?:"<>|]/g, "_")}.${suggestedExt}`;
-
-    let fileHandle;
-    try {
-      // Prompt user to select local save path using File System Access API
-      fileHandle = await window.showSaveFilePicker({
-        suggestedName: suggestedName,
-        types: [{
-          description: 'Video File',
-          accept: {
-            [`video/${suggestedExt}`]: [`.${suggestedExt}`]
-          }
-        }]
-      });
-    } catch (err) {
-      console.log("Save picker cancelled:", err);
-      return;
-    }
+    const cleanTitle = (fetchedInfo.title || 'video').replace(/[\\/*?:"<>|]/g, "_");
+    const suggestedName = `${cleanTitle}.${suggestedExt}`;
+    const formatHeight = selectedFormat && selectedFormat.height ? selectedFormat.height : '';
 
     startDownloadBtn.disabled = true;
     closeDownloadBtn.disabled = true;
     downloadProgressContainer.style.display = 'block';
-    downloadStatusText.textContent = "Initializing download on server...";
-    downloadProgressBar.style.width = '0%';
+    downloadStatusText.textContent = "Starting download...";
+    downloadProgressBar.style.width = '5%';
 
     try {
       // 1. Start download job on local server
-      const startRes = await fetch(`/api/download?url=${encodeURIComponent(urlVal)}&formatId=${encodeURIComponent(formatId)}&title=${encodeURIComponent(fetchedInfo.title)}`);
+      const startRes = await fetch(`/api/download?url=${encodeURIComponent(urlVal)}&formatId=${encodeURIComponent(formatId)}&height=${encodeURIComponent(formatHeight)}&title=${encodeURIComponent(cleanTitle)}`);
       if (!startRes.ok) throw new Error("Failed to start download job on server.");
       
       const { downloadId } = await startRes.json();
@@ -2297,19 +2282,21 @@
       // 2. Poll progress until complete
       let downloadPercent = 0;
       while (true) {
-        await new Promise(resolve => setTimeout(resolve, 800));
+        await new Promise(resolve => setTimeout(resolve, 400));
         
         const progRes = await fetch(`/api/progress?id=${downloadId}`);
         if (!progRes.ok) throw new Error("Failed to fetch download progress.");
         
         const progData = await progRes.json();
         if (progData.status === 'error') {
-          throw new Error("Local server experienced an error during merging.");
+          throw new Error("Local server experienced an error during download/merge.");
         }
         
         downloadPercent = progData.percent || 0;
-        downloadProgressBar.style.width = `${downloadPercent}%`;
-        downloadStatusText.textContent = `Server downloading & merging: ${downloadPercent.toFixed(1)}%`;
+        downloadProgressBar.style.width = `${Math.max(5, downloadPercent)}%`;
+        downloadStatusText.textContent = downloadPercent >= 100 
+          ? "Finalizing & merging video..." 
+          : `Downloading video: ${downloadPercent.toFixed(1)}%`;
         
         if (progData.status === 'ready') {
           break;
@@ -2317,21 +2304,25 @@
       }
 
       // 3. Trigger native browser download once file is ready
-      downloadStatusText.textContent = "Saving to disk...";
+      downloadStatusText.textContent = "Download complete! Saving file...";
       downloadProgressBar.style.width = '100%';
 
+      const fileDownloadUrl = `/api/get-file?id=${downloadId}`;
+      
+      // Use hidden link & iframe fallback for 100% reliable browser download
       const a = document.createElement('a');
-      a.href = `/api/get-file?id=${downloadId}`;
+      a.href = fileDownloadUrl;
       a.download = suggestedName;
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
-
-      downloadStatusText.textContent = "Download complete!";
       setTimeout(() => {
-        alert("Video downloaded successfully!");
+        if (document.body.contains(a)) document.body.removeChild(a);
+      }, 5000);
+
+      setTimeout(() => {
         closeDownloadModal();
-      }, 500);
+      }, 1500);
 
     } catch (err) {
       alert(`Download failed: ${err.message}`);
