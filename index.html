@@ -811,6 +811,10 @@
       <div class="panel-head">
         <div class="panel-head-row">
           <div class="panel-title">Video Points<span class="panel-count" id="ptCount">0</span></div>
+          <button id="secureBrowserBtn" class="secure-btn" title="Open Secure Browser" style="margin-left: auto; margin-right: 8px; font-size: 11px; padding: 4px 8px; background: var(--amber); color: #000; border-radius: 4px; font-weight: bold; cursor: pointer; border: none; display: flex; align-items: center; gap: 4px;">
+            <svg viewBox="0 0 24 24" style="width:12px; height:12px; fill:currentColor;"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+            Secure Browser
+          </button>
           <button class="collapse-btn" id="collapseBtn" title="Collapse panel">
             <svg viewBox="0 0 24 24"><path d="M15.5 5L9 12l6.5 7 1.5-1.5L12 12l5-5.5z"/></svg>
           </button>
@@ -941,6 +945,67 @@
       <button class="btn btn-ghost" id="closeDownloadBtn">Close</button>
       <button class="btn btn-solid" id="startDownloadBtn" style="display: none;">Save Video</button>
     </div>
+  </div>
+</div>
+
+<!-- SECURE BROWSER OVERLAY -->
+<div class="secure-browser-overlay" id="secureBrowserOverlay" style="display: none; position: fixed; inset: 0; background: var(--bg-void); z-index: 9999; flex-direction: column;">
+  <div class="secure-browser-header" style="height: 48px; background: var(--bg-panel-solid); border-bottom: 1px solid var(--hairline); display: flex; align-items: center; padding: 0 16px; gap: 12px;">
+    <div style="color: var(--amber); display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 14px;">
+      <svg viewBox="0 0 24 24" style="width: 18px; height: 18px; fill: currentColor;"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+      Secure Browser
+    </div>
+    <input type="text" id="secureBrowserUrl" placeholder="Enter URL (e.g. google.com)" style="flex: 1; background: var(--bg-raised); border: 1px solid var(--hairline); color: var(--text-1); border-radius: 6px; padding: 6px 12px; font-size: 13px; outline: none; margin-left: 20px;">
+    <button id="secureBrowserGo" style="background: var(--amber); color: #000; border: none; padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; transition: opacity 0.2s;">GO</button>
+    <button id="secureBrowserHome" style="background: transparent; color: var(--text-2); border: 1px solid var(--hairline); padding: 4px 10px; border-radius: 6px; cursor: pointer; margin-left: 8px; transition: background 0.2s;" title="Start Page">
+      <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor;"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+    </button>
+    <button id="secureBrowserRefresh" style="background: transparent; color: var(--text-2); border: 1px solid var(--hairline); padding: 4px 10px; border-radius: 6px; cursor: pointer; margin-left: 8px; transition: background 0.2s;" title="Refresh Page">
+      <svg viewBox="0 0 24 24" style="width: 16px; height: 16px; fill: currentColor;"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+    <button id="secureBrowserClose" style="background: transparent; color: var(--text-2); border: 1px solid var(--hairline); padding: 6px 14px; border-radius: 6px; font-weight: 500; font-size: 12px; cursor: pointer; margin-left: 8px; transition: background 0.2s;">CLOSE</button>
+  </div>
+  <div style="flex: 1; position: relative; background: var(--bg-void);">
+    <!-- DASHBOARD OVERLAY -->
+    <div id="secureDashboard" style="position: absolute; inset: 0; background: var(--bg-void); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10;">
+      <div style="text-align: center; max-width: 600px; width: 100%; padding: 40px; transform: translateY(-20px);">
+        <svg viewBox="0 0 24 24" style="width: 64px; height: 64px; fill: var(--amber); margin-bottom: 24px;"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+        <h2 style="font-size: 32px; font-weight: 600; margin: 0 0 16px 0; color: var(--text-1); letter-spacing: -0.5px;">Secure Browser</h2>
+        <p style="font-size: 15px; color: var(--text-2); margin: 0 0 32px 0; line-height: 1.6;">Your session is strictly sandboxed. Cookies, history, and cache are completely isolated from your main browser for maximum privacy.</p>
+        
+        <div style="position: relative; display: flex; align-items: center; background: var(--bg-raised); border: 1px solid rgba(255,255,255,0.1); border-radius: 99px; padding: 6px; box-shadow: 0 8px 30px rgba(0,0,0,0.4); transition: border-color 0.2s ease;">
+          <svg viewBox="0 0 24 24" style="width: 22px; height: 22px; fill: var(--text-3); margin: 0 16px;"><path d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 10-.7.7l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 110-9 4.5 4.5 0 010 9z"/></svg>
+          <input type="text" id="dashboardSearchInput" placeholder="Search the web securely or enter a URL..." style="flex: 1; background: transparent; border: none; color: var(--text-1); font-size: 16px; outline: none; padding: 14px 0;">
+          <button id="dashboardSearchBtn" style="background: var(--amber); color: #000; border: none; padding: 10px 24px; border-radius: 99px; font-weight: 600; font-size: 14px; cursor: pointer; margin-right: 2px;">Search</button>
+        </div>
+
+        <div style="display: flex; gap: 40px; justify-content: center; margin-top: 56px;">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+            <div style="width: 52px; height: 52px; border-radius: 50%; background: var(--bg-raised-2); display: flex; align-items: center; justify-content: center; color: var(--text-2); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+              <svg viewBox="0 0 24 24" style="width:24px;height:24px;fill:currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+            </div>
+            <span style="font-size: 12px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">No Tracking</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+            <div style="width: 52px; height: 52px; border-radius: 50%; background: var(--bg-raised-2); display: flex; align-items: center; justify-content: center; color: var(--text-2); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+              <svg viewBox="0 0 24 24" style="width:24px;height:24px;fill:currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
+            </div>
+            <span style="font-size: 12px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Isolated Origin</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+            <div style="width: 52px; height: 52px; border-radius: 50%; background: var(--bg-raised-2); display: flex; align-items: center; justify-content: center; color: var(--text-2); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);">
+              <svg viewBox="0 0 24 24" style="width:24px;height:24px;fill:currentColor"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+            </div>
+            <span style="font-size: 12px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Private Session</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 
+      REMOVED 'allow-same-origin': Forces an opaque origin. The frame cannot access its own cookies or local storage, preventing tracking.
+      ADDED 'referrerpolicy="no-referrer"': Prevents target websites from seeing where the request came from.
+    -->
+    <iframe id="secureBrowserFrame" sandbox="allow-scripts allow-forms allow-popups" referrerpolicy="no-referrer" credentialless style="width: 100%; height: 100%; border: none; background: #fff;"></iframe>
   </div>
 </div>
 
@@ -2558,6 +2623,86 @@
       alert("Failed to parse JSON data.");
     }
   }
+
+  // --- SECURE BROWSER LOGIC ---
+  const secureBrowserBtn = document.getElementById('secureBrowserBtn');
+  const secureBrowserOverlay = document.getElementById('secureBrowserOverlay');
+  const secureBrowserClose = document.getElementById('secureBrowserClose');
+  const secureBrowserGo = document.getElementById('secureBrowserGo');
+  const secureBrowserUrl = document.getElementById('secureBrowserUrl');
+  const secureBrowserFrame = document.getElementById('secureBrowserFrame');
+  
+  // Dashboard elements
+  const secureDashboard = document.getElementById('secureDashboard');
+  const dashboardSearchInput = document.getElementById('dashboardSearchInput');
+  const dashboardSearchBtn = document.getElementById('dashboardSearchBtn');
+  const secureBrowserHome = document.getElementById('secureBrowserHome');
+  const secureBrowserRefresh = document.getElementById('secureBrowserRefresh');
+
+  function showDashboard() {
+    secureDashboard.style.display = 'flex';
+    secureBrowserFrame.src = 'about:blank'; // Clear history/content
+    secureBrowserUrl.value = '';
+    dashboardSearchInput.value = '';
+    setTimeout(() => dashboardSearchInput.focus(), 50);
+  }
+
+  secureBrowserRefresh.addEventListener('click', () => {
+    const currentSrc = secureBrowserFrame.src;
+    // Don't refresh if we're on the dashboard
+    if (currentSrc && !currentSrc.includes('about:blank') && !currentSrc.includes(window.location.host)) {
+      secureBrowserFrame.src = currentSrc;
+    }
+  });
+
+  secureBrowserBtn.addEventListener('click', () => {
+    secureBrowserOverlay.style.display = 'flex';
+    if (!secureBrowserUrl.value.trim()) {
+      showDashboard();
+    } else {
+      secureBrowserUrl.focus();
+    }
+  });
+
+  secureBrowserClose.addEventListener('click', () => {
+    secureBrowserOverlay.style.display = 'none';
+    showDashboard(); // Reset for next time
+  });
+  
+  secureBrowserHome.addEventListener('click', showDashboard);
+
+  function loadSecureUrl(sourceInput) {
+    let input = sourceInput.value.trim();
+    if (!input) return;
+
+    // Check if input looks like a URL (contains a dot, no spaces)
+    const isUrl = /^[^\\s]+\\.[^\\s]+$/.test(input) || input.startsWith('http://') || input.startsWith('https://') || input.startsWith('localhost:');
+    
+    let url;
+    if (isUrl) {
+      url = input.startsWith('http') ? input : 'https://' + input;
+    } else {
+      // Treat as a search query. Most search engines block iframes (X-Frame-Options), 
+      // but Google allows it if we pass `igu=1`. 
+      // We also pass `gbv=1` (Google Basic Version) which forces the lightweight HTML version.
+      // This is CRUCIAL because our strict iframe blocks cookies/storage, which causes the modern Google JS to crash.
+      url = 'https://www.google.com/search?igu=1&gbv=1&q=' + encodeURIComponent(input);
+    }
+    
+    secureBrowserUrl.value = input; // Sync top bar
+    secureBrowserFrame.src = url;
+    secureDashboard.style.display = 'none'; // Hide dashboard
+  }
+
+  secureBrowserGo.addEventListener('click', () => loadSecureUrl(secureBrowserUrl));
+  secureBrowserUrl.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') loadSecureUrl(secureBrowserUrl);
+  });
+  
+  dashboardSearchBtn.addEventListener('click', () => loadSecureUrl(dashboardSearchInput));
+  dashboardSearchInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') loadSecureUrl(dashboardSearchInput);
+  });
 
   // --- LIVE RELOAD CLIENT CODE ---
   const eventSource = new EventSource('/api/live-reload');
