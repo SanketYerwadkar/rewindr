@@ -505,6 +505,123 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // API: Browse for file using native OS dialog (Windows PowerShell)
+  if (pathname === '/api/browse-file') {
+    const psCommand = `
+      Add-Type -AssemblyName System.Windows.Forms;
+      $f = New-Object System.Windows.Forms.OpenFileDialog;
+      $f.Filter = 'Video files (*.mp4;*.webm;*.ogg;*.mkv;*.avi)|*.mp4;*.webm;*.ogg;*.mkv;*.avi|All files (*.*)|*.*';
+      $f.Title = 'Select a Video File';
+      if($f.ShowDialog() -eq 'OK'){
+          Write-Output $f.FileName
+      }
+    `;
+    
+    // We must run it without a hidden window so the dialog actually shows
+    const child = spawn('powershell', ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', psCommand]);
+    
+    let resultPath = '';
+    child.stdout.on('data', (data) => {
+      resultPath += data.toString();
+    });
+
+    child.on('close', (code) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ path: resultPath.trim() }));
+    });
+    return;
+  }
+
+  // API: Cut Video job
+  if (pathname === '/api/cut-video') {
+    const sourcePath = parsedUrl.query.sourcePath;
+    const start = parsedUrl.query.start;
+    const end = parsedUrl.query.end;
+    const outputFilename = parsedUrl.query.outputFilename || 'cut_video';
+
+    if (!sourcePath || !start || !end) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'sourcePath, start, and end are required' }));
+    }
+
+    try {
+      await ensureFfmpeg();
+
+      const jobId = 'cut_' + Date.now();
+      const ext = path.extname(sourcePath) || '.mp4';
+      const outputFilePath = path.join(TEMP_DIR, `${jobId}${ext}`);
+
+      downloads[jobId] = {
+        percent: 0,
+        status: 'downloading', // reuse same states so frontend progress works seamlessly
+        filePath: '',
+        filename: '',
+        userTitle: outputFilename
+      };
+
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ downloadId: jobId }));
+
+      // Convert HH:MM:SS to seconds for percentage calculation
+      let duration = 0;
+      try {
+        const getSecs = (str) => {
+          const parts = str.split(':').map(Number);
+          if (parts.length === 3) return parts[0]*3600 + parts[1]*60 + parts[2];
+          if (parts.length === 2) return parts[0]*60 + parts[1];
+          return Number(str);
+        };
+        duration = getSecs(end) - getSecs(start);
+      } catch (e) {}
+
+      const args = [
+        '-i', sourcePath,
+        '-ss', start,
+        '-to', end,
+        '-c', 'copy',
+        '-y',
+        outputFilePath
+      ];
+
+      console.log(`Spawning ffmpeg for cut job:`, args);
+      const child = spawn(FFMPEG_PATH, args);
+
+      child.stderr.on('data', (data) => {
+        const text = data.toString();
+        // ffmpeg progress is sent to stderr
+        const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d+)/);
+        if (timeMatch && duration > 0) {
+          const t = Number(timeMatch[1])*3600 + Number(timeMatch[2])*60 + Number(timeMatch[3]);
+          let p = (t / duration) * 100;
+          if (p > 100) p = 100;
+          if (p > downloads[jobId].percent) {
+             downloads[jobId].percent = p;
+          }
+        }
+      });
+
+      child.on('close', (code) => {
+        if (code === 0 && fs.existsSync(outputFilePath)) {
+           const cleanTitle = downloads[jobId].userTitle.replace(/[\\/*?:"<>|]/g, "_");
+           downloads[jobId].status = 'ready';
+           downloads[jobId].percent = 100;
+           downloads[jobId].filePath = outputFilePath;
+           downloads[jobId].filename = `${cleanTitle}${ext}`;
+           console.log(`Cut job ${jobId} completed successfully.`);
+        } else {
+           downloads[jobId].status = 'error';
+           console.error(`ffmpeg cut exited with code ${code}`);
+        }
+      });
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    }
+    return;
+  }
+
   // API: Get download job status
   if (pathname === '/api/progress') {
     const id = parsedUrl.query.id;

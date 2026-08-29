@@ -854,6 +854,53 @@
         <button class="add-btn" id="emptyAddBtn" style="height:36px;">+ Add point</button>
       </div>
 
+      <!-- VIDEO CUTTER PANEL -->
+      <div class="cutter-section" style="border-top: 1px solid var(--hairline); padding: 14px 16px; background: rgba(0,0,0,0.12); display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <span style="font-family:'Space Grotesk',sans-serif; font-size:13.5px; font-weight:600; color:var(--text-1);">Video Cutter</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; gap: 4px;">
+            <input type="text" id="cutterSourcePath" placeholder="Source Path (e.g. C:\video.mp4)" style="flex: 1; background: var(--bg-raised); border: 1px solid var(--hairline); color: var(--text-1); border-radius: 4px; padding: 6px 8px; font-size: 11.5px; outline: none;">
+            <button id="cutterBrowseBtn" style="background: var(--steel-dim); border: 1px solid rgba(91,122,140,0.4); color: var(--text-1); border-radius: 4px; padding: 0 10px; font-size: 11px; font-weight: 500; cursor: pointer;">Browse</button>
+          </div>
+          
+          <div style="display: flex; gap: 8px;">
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <label style="font-size: 10.5px; color: var(--text-3);">Start Time</label>
+                <button id="cutterSetStartBtn" title="Set to current player time" style="background: none; border: none; color: var(--amber); font-size: 10px; cursor: pointer; padding: 0;">Get Time</button>
+              </div>
+              <input type="text" id="cutterStartTime" placeholder="00:00:00" style="width: 100%; background: var(--bg-raised); border: 1px solid var(--hairline); color: var(--text-1); border-radius: 4px; padding: 6px 8px; font-size: 11.5px; outline: none;">
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <label style="font-size: 10.5px; color: var(--text-3);">End Time</label>
+                <button id="cutterSetEndBtn" title="Set to current player time" style="background: none; border: none; color: var(--amber); font-size: 10px; cursor: pointer; padding: 0;">Get Time</button>
+              </div>
+              <input type="text" id="cutterEndTime" placeholder="00:00:00" style="width: 100%; background: var(--bg-raised); border: 1px solid var(--hairline); color: var(--text-1); border-radius: 4px; padding: 6px 8px; font-size: 11.5px; outline: none;">
+            </div>
+          </div>
+
+          <input type="text" id="cutterOutputName" placeholder="Save As (e.g. clip1)" style="width: 100%; background: var(--bg-raised); border: 1px solid var(--hairline); color: var(--text-1); border-radius: 4px; padding: 6px 8px; font-size: 11.5px; outline: none;">
+          
+          <button id="cutterCutBtn" style="background: var(--steel); color: #fff; border: none; padding: 8px; border-radius: 4px; font-weight: 600; font-size: 11.5px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: background 0.2s;">
+            <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"/></svg>
+            Cut Video
+          </button>
+
+          <div id="cutterProgressContainer" style="display: none; flex-direction: column; gap: 4px; margin-top: 4px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-2);">
+              <span id="cutterStatusText">Cutting...</span>
+              <span id="cutterPercentText">0%</span>
+            </div>
+            <div style="width: 100%; height: 4px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden;">
+              <div id="cutterProgressBar" style="width: 0%; height: 100%; background: var(--amber); transition: width 0.2s linear;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- PLAYLIST / MIXER PANEL -->
       <div class="playlist-section" style="border-top: 1px solid var(--hairline); padding: 14px 16px; background: rgba(0,0,0,0.12); display: flex; flex-direction: column; gap: 10px;">
         <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -2703,6 +2750,128 @@
   dashboardSearchInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') loadSecureUrl(dashboardSearchInput);
   });
+
+  // --- VIDEO CUTTER LOGIC ---
+  const cutterSourcePath = document.getElementById('cutterSourcePath');
+  const cutterBrowseBtn = document.getElementById('cutterBrowseBtn');
+  const cutterStartTime = document.getElementById('cutterStartTime');
+  const cutterEndTime = document.getElementById('cutterEndTime');
+  const cutterOutputName = document.getElementById('cutterOutputName');
+  const cutterSetStartBtn = document.getElementById('cutterSetStartBtn');
+  const cutterSetEndBtn = document.getElementById('cutterSetEndBtn');
+  const cutterCutBtn = document.getElementById('cutterCutBtn');
+  const cutterProgressContainer = document.getElementById('cutterProgressContainer');
+  const cutterStatusText = document.getElementById('cutterStatusText');
+  const cutterPercentText = document.getElementById('cutterPercentText');
+  const cutterProgressBar = document.getElementById('cutterProgressBar');
+
+  cutterBrowseBtn.addEventListener('click', () => {
+    cutterBrowseBtn.textContent = '...';
+    fetch('/api/browse-file')
+      .then(res => res.json())
+      .then(data => {
+        cutterBrowseBtn.textContent = 'Browse';
+        if (data.path) {
+          cutterSourcePath.value = data.path;
+        }
+      })
+      .catch(err => {
+        cutterBrowseBtn.textContent = 'Browse';
+        console.error("Failed to open browse dialog:", err);
+      });
+  });
+
+  function formatTimeHHMMSS(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return [
+      h.toString().padStart(2, '0'),
+      m.toString().padStart(2, '0'),
+      s.toString().padStart(2, '0')
+    ].join(':');
+  }
+
+  cutterSetStartBtn.addEventListener('click', () => {
+    if (mainVideo.duration) {
+      cutterStartTime.value = formatTimeHHMMSS(mainVideo.currentTime);
+    }
+  });
+
+  cutterSetEndBtn.addEventListener('click', () => {
+    if (mainVideo.duration) {
+      cutterEndTime.value = formatTimeHHMMSS(mainVideo.currentTime);
+    }
+  });
+
+  cutterCutBtn.addEventListener('click', () => {
+    const sourcePath = cutterSourcePath.value.trim();
+    const start = cutterStartTime.value.trim();
+    const end = cutterEndTime.value.trim();
+    const outputName = cutterOutputName.value.trim() || 'cut_video';
+
+    if (!sourcePath || !start || !end) {
+      alert("Please provide Source Path, Start Time, and End Time.");
+      return;
+    }
+
+    cutterCutBtn.style.display = 'none';
+    cutterProgressContainer.style.display = 'flex';
+    cutterStatusText.textContent = "Starting...";
+    cutterPercentText.textContent = "0%";
+    cutterProgressBar.style.width = "0%";
+
+    const url = `/api/cut-video?sourcePath=${encodeURIComponent(sourcePath)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&outputFilename=${encodeURIComponent(outputName)}`;
+    
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        pollCutterProgress(data.downloadId);
+      })
+      .catch(err => {
+        alert("Error: " + err.message);
+        cutterCutBtn.style.display = 'flex';
+        cutterProgressContainer.style.display = 'none';
+      });
+  });
+
+  function pollCutterProgress(jobId) {
+    const interval = setInterval(() => {
+      fetch('/api/progress?id=' + jobId)
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) {
+            clearInterval(interval);
+            cutterStatusText.textContent = "Error";
+            return;
+          }
+          
+          cutterPercentText.textContent = Math.floor(data.percent) + '%';
+          cutterProgressBar.style.width = data.percent + '%';
+          cutterStatusText.textContent = data.status === 'ready' ? "Finished" : "Cutting...";
+
+          if (data.status === 'ready') {
+            clearInterval(interval);
+            setTimeout(() => {
+              cutterCutBtn.style.display = 'flex';
+              cutterProgressContainer.style.display = 'none';
+              // Trigger file download
+              window.location.href = `/api/get-file?id=${jobId}`;
+            }, 1000);
+          } else if (data.status === 'error') {
+            clearInterval(interval);
+            cutterStatusText.textContent = "Failed";
+            setTimeout(() => {
+              cutterCutBtn.style.display = 'flex';
+              cutterProgressContainer.style.display = 'none';
+            }, 3000);
+          }
+        });
+    }, 1000);
+  }
 
   // --- LIVE RELOAD CLIENT CODE ---
   const eventSource = new EventSource('/api/live-reload');
